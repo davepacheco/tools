@@ -1,0 +1,258 @@
+#!/usr/bin/env node
+
+/*
+ * Copyright 2012 David Pacheco. All rights reserved.
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to
+ * deal in the Software without restriction, including without limitation the
+ * rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+ * sell copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ * 
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+ * IN THE SOFTWARE. 
+ */
+
+/*
+ * filepos: convert a "filename:offset" to a line number
+ */
+
+var mod_events = require('events');
+var mod_fs = require('fs');
+var mod_util = require('util');
+
+var opt_p = false;	/* parseable output */
+
+var nerrors;		/* number of input errors */
+var entries;		/* input arguments */
+var enti;		/* current argument */
+
+function main()
+{
+	var nerrors = 0;
+
+	parseCommandLine(process.argv.slice(2));
+
+	if (nerrors > 0) {
+		console.error('bailing out after %d errors', nerrors);
+		process.exit(1);
+	}
+
+	if (entries.length === 0) {
+		console.error('usage: %s %s filename:position ...\n',
+		    process.argv[0], process.argv[1]);
+		console.error('Prints the line number for a given file ' +
+		    'offset.');
+		process.exit(2);
+	}
+
+	enti = 0;
+	findPositionForFile();
+}
+
+function parseCommandLine(argv)
+{
+	entries = [];
+
+	argv.forEach(function (arg) {
+		var parts, pos;
+
+		if (arg == '-p') {
+			opt_p = true;
+			return;
+		}
+
+		parts = arg.split(':');
+		if (parts.length != 2) {
+			console.error('invalid file:position: "%s"', arg);
+			nerrors++;
+			return;
+		}
+
+		pos = parseInt(parts[1], 10);
+		if (isNaN(pos) || pos < 0) {
+			console.error('invalid position: "%s"', arg);
+			nerrors++;
+			return;
+		}
+
+		entries.push({ file: parts[0], pos: pos });
+	});
+}
+
+/*
+ * Grabs the next request from "entries" and find the right position.
+ */
+function findPositionForFile()
+{
+	var entry = entries[enti++];
+	var filename = entry['file'];
+	var pos = entry['pos'];
+	var rstream, lstream;
+	var seen = false;
+
+	rstream = mod_fs.createReadStream(filename, { encoding: 'utf8' });
+	lstream = new LineReader(rstream);
+	lstream.on('line', function (line, lnum, pnum) {
+		var prefix, off, i;
+
+		if (pnum < pos)
+			/* We haven't yet reached the right line. */
+			return;
+
+		if (seen)
+			/*
+			 * We're done already. We called destroy() so that we
+			 * shouldn't get any more events, but we do still see
+			 * them.
+			 */
+			return;
+
+		/*
+		 * We've found the line containing the requested position. Emit
+		 * a line of the form:
+		 *
+		 *    [filename:]line:off
+		 *
+		 * The filename is only included if -p (parseable mode) was
+		 * specified or if there were multiple files specified.
+		 *
+		 * In normal mode (without -p), we append the actual contents of
+		 * the line followed by a line that points to the requested
+		 * position.
+		 */
+		prefix = '';
+		off = line.length - (pnum - pos);
+
+		if (opt_p || entries.length > 1)
+			prefix += filename + ':';
+
+		prefix += lnum + ':';
+		prefix += off;
+
+		if (opt_p) {
+			process.stdout.write(prefix + '\n');
+			seen = true;
+			lstream.destroy();
+			return;
+		}
+
+		prefix += ':  ';
+		process.stdout.write(prefix + line);
+
+		if (line[line.length - 1] != '\n')
+			process.stdout.write('\n');
+
+		for (i = 0; i < off + prefix.length - 1; i++)
+			process.stdout.write(' ');
+
+		process.stdout.write('^\n');
+		seen = true;
+		lstream.destroy();
+	});
+
+	lstream.on('end', function () {
+		if (!seen) {
+			/*
+			 * If we haven't yet found the right position, it's past
+			 * the end of the file.
+			 */
+			var prefix = '';
+
+			if (opt_p || entries.length > 1)
+				prefix += filename + ':';
+
+			process.stdout.write(prefix + 'EOF\n');
+		}
+
+		/*
+		 * If there are more files to process, do that now.
+		 */
+		if (enti < entries.length)
+			findPositionForFile();
+	});
+
+}
+
+/*
+ * LineReader is a stream-like event emitter that, given a stream, emits "line"
+ * events for each line.
+ */
+function LineReader(stream)
+{
+	this.lr_stream = stream;
+	this.lr_line = 0;
+	this.lr_pos = 0;
+	this.lr_buffer = '';
+
+	this.lr_stream.on('data', this.onData.bind(this));
+	this.lr_stream.on('end', this.onEnd.bind(this));
+	mod_events.EventEmitter.call(this);
+}
+
+mod_util.inherits(LineReader, mod_events.EventEmitter);
+
+LineReader.prototype.onData = function (chunk)
+{
+	var p;
+
+	p = chunk.indexOf('\n');
+	if (p == -1) {
+		/* This chunk of data has no newline, so just append it. */
+		this.lr_buffer += chunk;
+		this.lr_pos += chunk.length;
+		return;
+	}
+
+	/*
+	 * Take everything up to the first newline, append it to any accumulated
+	 * buffer, and emit 'line'. Then invoke ourselves recursively to handle
+	 * the rest of this chunk.
+	 */
+	this.lr_buffer += chunk.substr(0, p + 1);
+	this.lr_pos += p + 1;
+	this.lr_line++;
+	this.emit('line', this.lr_buffer, this.lr_line, this.lr_pos);
+	this.lr_buffer = '';
+	return (this.onData(chunk.substr(p + 1)));
+};
+
+LineReader.prototype.onEnd = function ()
+{
+	this.lr_done = true;
+
+	/*
+	 * Emit any remaining data that wasn't terminated with a newline.
+	 */
+	if (this.lr_buffer.length > 0) {
+		this.lr_line++;
+		this.emit('line', this.lr_buffer, this.lr_line, this.lr_pos);
+	}
+
+	this.emit('end');
+};
+
+LineReader.prototype.destroy = function ()
+{
+	/*
+	 * Destroy the stream unless it's already ended. This check is important
+	 * because the caller may invoke our destroy() from its "line" event
+	 * handler, but we may emit "line" after the stream has ended, in which
+	 * case the stream is no longer valid.
+	 */
+	if (!this.lr_done) {
+		this.lr_stream.destroy();
+		this.emit('end');
+	}
+};
+
+main();
