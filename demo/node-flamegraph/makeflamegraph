@@ -1,0 +1,30 @@
+#!/bin/bash
+
+#
+# Trace all running node programs and create a flame graph.
+#
+set -o errexit
+
+if [[ -z "$1" ]]; then
+	echo "usage: $0 <name>" >&2
+	exit 2
+fi
+
+stackcollapse=stackcollapse.pl
+flamegraph=flamegraph.pl
+name="$1"
+dir="ex-$name"
+
+echo "Creating $dir/$name.svg"
+
+mkdir -p $dir
+
+dtrace -o $dir/profile.out	\
+    -n 'tick-30s{ exit(0); }'	\
+    -n 'profile-997/execname == "node"/{ @[jstack(100, 8192)] = count(); }'
+
+c++filt < $dir/profile.out > $dir/filtered.out
+
+$stackcollapse $dir/filtered.out > $dir/collapsed.out
+
+$flamegraph $dir/collapsed.out > $dir/$name.svg
