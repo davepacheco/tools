@@ -10,8 +10,8 @@ if [[ -z "$1" ]]; then
 	exit 2
 fi
 
-stackcollapse=stackcollapse.pl
-flamegraph=flamegraph.pl
+stackcollapse=stackcollapse
+flamegraph=flamegraph
 name="$1"
 dir="ex-$name"
 
@@ -25,6 +25,6 @@ dtrace -o $dir/profile.out	\
 
 c++filt < $dir/profile.out > $dir/filtered.out
 
-$stackcollapse $dir/filtered.out > $dir/collapsed.out
+$stackcollapse < $dir/filtered.out > $dir/collapsed.out
 
-$flamegraph $dir/collapsed.out > $dir/$name.svg
+$flamegraph < $dir/collapsed.out > $dir/$name.svg
