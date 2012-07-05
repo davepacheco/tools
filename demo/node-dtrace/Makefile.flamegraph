@@ -1,0 +1,8 @@
+%.svg: %.filtered.out
+	stackvis dtrace flamegraph-svg < $^ > $@
+
+%.filtered.out: %.out
+	c++filt < $< > $@
+
+clean:
+	rm -f *.filtered.out *.svg
