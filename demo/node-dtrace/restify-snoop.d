@@ -6,34 +6,28 @@
 restify*:::route-start
 {
    track[arg2] = timestamp;
+   printf("-> %6u  %s\n", arg2, copyinstr(arg1));
 }
 
 restify*:::handler-start
 /track[arg3]/
 {
+   printf("  -> %6u  %15s %s\n", arg3, copyinstr(arg1), copyinstr(arg2));
    h[arg3, copyinstr(arg2)] = timestamp;
 }
 
 restify*:::handler-done
 /track[arg3] && h[arg3, copyinstr(arg2)]/
 {
-   @handlers[copyinstr(arg1),copyinstr(arg2)] = 
-     lquantize((timestamp - h[arg3, copyinstr(arg2)]) / 1000000, 0, 25, 1);
+   printf("  <- %6u  %15s %s (%d us)\n", arg3, copyinstr(arg1), copyinstr(arg2),
+      (timestamp - h[arg3, copyinstr(arg2)]) / 1000);
    h[arg3, copyinstr(arg2)] = 0;
 }
 
 restify*:::route-done
 /track[arg2]/
 {
-   @routes[copyinstr(arg1)] = 
-     lquantize((timestamp - track[arg2]) / 1000000, 0, 25, 1);
+   printf("<- %6u  %s (%d us)\n", arg2, copyinstr(arg1),
+      (timestamp - track[arg2]) / 1000);
    track[arg2] = 0;
-}
-
-END
-{
-	printf("ROUTE LATENCY (milliseconds)");
-	printa(@routes);
-	printf("\nHANDLER LATENCY (milliseconds)\n");
-	printa(@handlers);
 }
